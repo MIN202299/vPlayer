@@ -30,12 +30,15 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     
     var isSeeking = false
     
+    private let historyStore = PlaybackHistoryStore.shared
     private var currentUrl: URL?
     private var timeObserver: Any?
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var playerFailedObserver: NSObjectProtocol?
     private var seekRequestCancellable: AnyCancellable?
     private var triedVLCKit = false
+    private var pendingResumeTime: Double?
+    private var lastPersistedPlaybackTime: Double = 0
     
     override init() {
         super.init()
@@ -57,6 +60,8 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         
         currentUrl = url
         triedVLCKit = false
+        pendingResumeTime = historyStore.resumeTimeIfAvailable(for: url)
+        lastPersistedPlaybackTime = pendingResumeTime ?? 0
         
 #if canImport(VLCKit)
         if VideoFormatSupport.prefersAVFoundation(for: url) {
@@ -180,6 +185,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             self.durationString = self.formatTime(seconds: duration)
             self.progress = time.seconds / duration
             self.timeString = self.formatTime(seconds: time.seconds)
+            self.persistPlaybackTimeIfNeeded(time.seconds)
         }
         
         playerItemStatusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
@@ -187,6 +193,8 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             switch item.status {
             case .failed:
                 self.handleAVFailure(error: item.error)
+            case .readyToPlay:
+                self.applyPendingResumeForAVPlayer()
             default:
                 break
             }
@@ -215,6 +223,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         durationString = formatTime(seconds: 0)
         timeString = formatTime(seconds: 0)
         progress = 0
+        pendingResumeTime = nil
     }
     
     private func applyVolume() {
@@ -311,6 +320,7 @@ extension VideoPlayerViewModel: VLCMediaPlayerDelegate {
             duration = mediaDuration
             durationString = formatTime(seconds: mediaDuration)
             progress = currentSeconds / mediaDuration
+            persistPlaybackTimeIfNeeded(currentSeconds)
         }
     }
     
@@ -321,6 +331,7 @@ extension VideoPlayerViewModel: VLCMediaPlayerDelegate {
             isPaused = true
         case .playing:
             isPaused = false
+            applyPendingResumeForVLCKit()
         default:
             break
         }
@@ -337,3 +348,28 @@ private extension VLCTime {
     }
 }
 #endif
+
+private extension VideoPlayerViewModel {
+    func persistPlaybackTimeIfNeeded(_ time: Double) {
+        guard let url = currentUrl else { return }
+        guard abs(time - lastPersistedPlaybackTime) >= 1 else { return }
+        lastPersistedPlaybackTime = time
+        historyStore.updatePlaybackPosition(url: url, time: time)
+    }
+    
+    func applyPendingResumeForAVPlayer() {
+        guard let pending = pendingResumeTime, let player = player else { return }
+        pendingResumeTime = nil
+        player.seek(to: CMTime(seconds: pending, preferredTimescale: 600))
+    }
+    
+#if canImport(VLCKit)
+    func applyPendingResumeForVLCKit() {
+        guard let pending = pendingResumeTime, let vlc = vlcMediaPlayer else { return }
+        pendingResumeTime = nil
+        vlc.time = VLCTime.fromSeconds(pending)
+    }
+#else
+    func applyPendingResumeForVLCKit() {}
+#endif
+}

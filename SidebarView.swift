@@ -9,8 +9,6 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             // Header with actions
             HStack(spacing: 16) {
-                Spacer()
-                
                 Button(action: { isImporterPresented = true }) {
                     Image(systemName: "plus")
                         .font(.system(size: 18, weight: .medium))
@@ -19,8 +17,15 @@ struct SidebarView: View {
                 .buttonStyle(.borderless)
                 .help("Add Video")
                 
-                // Placeholder for future buttons
-                // Button(action: {}) { ... }
+                Spacer()
+                
+                Button(action: { playlistVM.clearPlaylist() }) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.primary)
+                }
+                .buttonStyle(.borderless)
+                .help("Clear Playlist")
             }
             .padding()
             .background(.ultraThinMaterial)

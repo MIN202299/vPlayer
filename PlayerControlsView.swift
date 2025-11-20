@@ -3,6 +3,7 @@ import AVKit
 
 struct PlayerControlsView: View {
     @ObservedObject var playerVM: VideoPlayerViewModel
+    @ObservedObject var playlistVM: PlaylistViewModel
     var onToggleSidebar: () -> Void
     
     @State private var showControls = false
@@ -13,7 +14,7 @@ struct PlayerControlsView: View {
     let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
     // Panel width constant
-    private let panelWidth: CGFloat = 600
+    private let panelWidth: CGFloat = 640
     
     var body: some View {
         ZStack {
@@ -63,29 +64,18 @@ struct PlayerControlsView: View {
                         }
                         
                         // Controls Row
-                        HStack(spacing: 40) {
-                            // Volume (Left)
-                            HStack(spacing: 8) {
-                                Image(systemName: playerVM.volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                    .foregroundColor(.white.opacity(0.8))
-                                    .onTapGesture {
-                                        playerVM.volume = playerVM.volume > 0 ? 0 : 1.0
-                                    }
-                                
-                                Slider(value: $playerVM.volume, in: 0...1, onEditingChanged: { editing in
-                                    isInteracting = editing
-                                    if editing {
-                                        lastHoverDate = Date()
-                                    }
-                                })
-                                .frame(width: 80)
-                                .accentColor(.white)
-                            }
-                            
-                            Spacer()
-                            
+                        ZStack {
                             // Playback Controls (Center)
-                            HStack(spacing: 24) {
+                            HStack(spacing: 20) {
+                                Button(action: { playlistVM.selectPrevious() }) {
+                                    Image(systemName: "backward.end.fill")
+                                        .font(.system(size: 20))
+                                        .foregroundColor(playlistVM.hasPrevious ? .white : .white.opacity(0.3))
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(!playlistVM.hasPrevious)
+
                                 Button(action: { playerVM.seek(by: -10) }) {
                                     Image(systemName: "gobackward.10")
                                         .font(.system(size: 20))
@@ -109,13 +99,40 @@ struct PlayerControlsView: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                
+                                Button(action: { playlistVM.selectNext() }) {
+                                    Image(systemName: "forward.end.fill")
+                                        .font(.system(size: 20))
+                                        .foregroundColor(playlistVM.hasNext ? .white : .white.opacity(0.3))
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(!playlistVM.hasNext)
                             }
                             
-                            Spacer()
-                            
-                            // Right Side Controls (Playlist)
+                            // Side Controls
                             HStack {
+                                // Volume (Left)
+                                HStack(spacing: 8) {
+                                    Image(systemName: playerVM.volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                        .foregroundColor(.white.opacity(0.8))
+                                        .onTapGesture {
+                                            playerVM.volume = playerVM.volume > 0 ? 0 : 1.0
+                                        }
+                                    
+                                    Slider(value: $playerVM.volume, in: 0...1, onEditingChanged: { editing in
+                                        isInteracting = editing
+                                        if editing {
+                                            lastHoverDate = Date()
+                                        }
+                                    })
+                                    .frame(width: 80)
+                                    .accentColor(.white)
+                                }
+                                
                                 Spacer()
+                                
+                                // Right Side Controls (Playlist)
                                 Button(action: onToggleSidebar) {
                                     Image(systemName: "sidebar.right")
                                         .font(.system(size: 20))
@@ -124,7 +141,6 @@ struct PlayerControlsView: View {
                                 }
                                 .buttonStyle(.plain)
                             }
-                            .frame(width: 110)
                         }
                     }
                     .padding(.horizontal, 24)

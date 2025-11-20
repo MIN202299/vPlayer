@@ -17,7 +17,7 @@ struct ContentView: View {
                 playerSurface()
                 
                 // Floating Controls
-                PlayerControlsView(playerVM: playerVM, onToggleSidebar: {
+                PlayerControlsView(playerVM: playerVM, playlistVM: playlistVM, onToggleSidebar: {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                         showSidebar.toggle()
                     }
