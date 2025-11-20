@@ -6,39 +6,47 @@ struct ContentView: View {
     @StateObject private var playlistVM = PlaylistViewModel()
     @StateObject private var playerVM = VideoPlayerViewModel()
     @State private var isImporterPresented = false
+    @State private var showSidebar = false
     
     var body: some View {
-        NavigationSplitView {
-            List(playlistVM.items, selection: $playlistVM.currentSelection) { item in
-                Text(item.title)
-                    .tag(item.id)
-            }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 250)
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: { isImporterPresented = true }) {
-                        Label("Add Video", systemImage: "plus")
-                    }
-                }
-            }
-            .environment(\.layoutDirection, .leftToRight)
-        } detail: {
+        ZStack(alignment: .trailing) { // Align content to trailing for sidebar
+            // Main Content Area
             ZStack {
                 Color.black.ignoresSafeArea()
                 
                 if let player = playerVM.player {
-                    VideoPlayer(player: player)
+                    CustomVideoPlayer(player: player)
                         .ignoresSafeArea()
                 } else {
                     Text("Drop videos here or click + to add")
                         .foregroundColor(.gray)
                 }
                 
-                PlayerControlsView(playerVM: playerVM)
+                // Floating Controls
+                PlayerControlsView(playerVM: playerVM, onToggleSidebar: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        showSidebar.toggle()
+                    }
+                })
             }
-            .environment(\.layoutDirection, .leftToRight)
+            .frame(minWidth: 650, minHeight: 400) // Minimum window size larger than control panel
+            
+            // Sidebar Overlay
+            if showSidebar {
+                SidebarView(
+                    playlistVM: playlistVM,
+                    isImporterPresented: $isImporterPresented,
+                    onClose: {
+                        withAnimation {
+                            showSidebar = false
+                        }
+                    }
+                )
+                .transition(.move(edge: .trailing))
+                .zIndex(1) // Ensure sidebar is on top
+            }
         }
-        .environment(\.layoutDirection, .rightToLeft)
+        .environment(\.layoutDirection, .leftToRight)
         .onChange(of: playlistVM.currentSelection) { _, newSelection in
             if let id = newSelection, let item = playlistVM.item(for: id) {
                 playerVM.loadVideo(from: item.url)

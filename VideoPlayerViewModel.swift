@@ -7,6 +7,13 @@ class VideoPlayerViewModel: ObservableObject {
     @Published var isPaused: Bool = false
     @Published var progress: Double = 0.0
     @Published var timeString: String = "00:00"
+    @Published var duration: Double = 0.0
+    @Published var durationString: String = "00:00"
+    @Published var volume: Float = 1.0 {
+        didSet {
+            player?.volume = volume
+        }
+    }
     
     var isSeeking = false
     private var currentUrl: URL?
@@ -48,6 +55,7 @@ class VideoPlayerViewModel: ObservableObject {
         // self.player?.usesExternalPlaybackWhileExternalScreenIsActive = true
         
         // Auto play
+        self.player?.volume = self.volume
         self.player?.play()
         self.isPaused = false
     }
@@ -62,6 +70,18 @@ class VideoPlayerViewModel: ObservableObject {
             isPaused = false
         }
     }
+
+    func seek(by seconds: Double) {
+        guard let player = player, let item = player.currentItem else { return }
+        let currentTime = player.currentTime().seconds
+        let duration = item.duration.seconds
+        
+        var newTime = currentTime + seconds
+        newTime = max(0, min(newTime, duration))
+        
+        player.seek(to: CMTime(seconds: newTime, preferredTimescale: 600))
+    }
+
     
     private func setupPlayerObservers() {
         guard let player = player else { return }
@@ -75,6 +95,8 @@ class VideoPlayerViewModel: ObservableObject {
             let duration = item.duration.seconds
             guard duration.isFinite && duration > 0 else { return }
             
+            self.duration = duration
+            self.durationString = self.formatTime(seconds: duration)
             self.progress = time.seconds / duration
             self.timeString = self.formatTime(seconds: time.seconds)
         }
