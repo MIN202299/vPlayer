@@ -44,7 +44,8 @@ class VideoPlayerViewModel: ObservableObject {
         
         // Enable AirPlay
         self.player?.allowsExternalPlayback = true
-        self.player?.usesExternalPlaybackWhileExternalScreenIsActive = true
+        // usesExternalPlaybackWhileExternalScreenIsActive is not available on macOS
+        // self.player?.usesExternalPlaybackWhileExternalScreenIsActive = true
         
         // Auto play
         self.player?.play()

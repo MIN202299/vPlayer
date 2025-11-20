@@ -36,7 +36,7 @@ struct ContentView: View {
                 PlayerControlsView(playerVM: playerVM)
             }
         }
-        .onChange(of: playlistVM.currentSelection) { newSelection in
+        .onChange(of: playlistVM.currentSelection) { _, newSelection in
             if let id = newSelection, let item = playlistVM.item(for: id) {
                 playerVM.loadVideo(from: item.url)
             }
@@ -61,17 +61,19 @@ struct ContentView: View {
     }
 }
 
-// Helper for Drag & Drop
-extension NSItemProvider {
+extension Array where Element == NSItemProvider {
     func loadObjects<T>(ofType type: T.Type, completion: @escaping (T) -> Void) -> Bool where T : _ObjectiveCBridgeable, T._ObjectiveCType : NSItemProviderReading {
-        if canLoadObject(ofClass: T.self) {
-            loadObject(ofClass: T.self) { object, _ in
-                if let value = object as? T {
-                    completion(value)
+        var found = false
+        for provider in self {
+            if provider.canLoadObject(ofClass: T.self) {
+                _ = provider.loadObject(ofClass: T.self) { object, _ in
+                    if let value = object {
+                        completion(value)
+                    }
                 }
+                found = true
             }
-            return true
         }
-        return false
+        return found
     }
 }
