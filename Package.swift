@@ -12,11 +12,19 @@ let package = Package(
         .executable(name: "vPlayer", targets: ["vPlayer"])
     ],
     targets: [
+        .binaryTarget(
+            name: "VLCKit",
+            path: "ThirdParty/VLCKit/VLCKit.xcframework"
+        ),
         .executableTarget(
             name: "vPlayer",
+            dependencies: [
+                "VLCKit"
+            ],
             path: ".",
             exclude: [
-                ".gitignore"
+                ".gitignore",
+                "ThirdParty"
             ],
             resources: [
                 .process("Resources")

@@ -14,13 +14,7 @@ struct ContentView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 
-                if let player = playerVM.player {
-                    CustomVideoPlayer(player: player)
-                        .ignoresSafeArea()
-                } else {
-                    Text("Drop videos here or click + to add")
-                        .foregroundColor(.gray)
-                }
+                playerSurface()
                 
                 // Floating Controls
                 PlayerControlsView(playerVM: playerVM, onToggleSidebar: {
@@ -54,7 +48,7 @@ struct ContentView: View {
         }
         .fileImporter(
             isPresented: $isImporterPresented,
-            allowedContentTypes: [.movie],
+            allowedContentTypes: VideoFormatSupport.supportedContentTypes,
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
@@ -69,6 +63,38 @@ struct ContentView: View {
             }
             return true
         }
+    }
+    
+    @ViewBuilder
+    private func playerSurface() -> some View {
+        switch playerVM.activeBackend {
+        case .avFoundation:
+            if let player = playerVM.player {
+                CustomVideoPlayer(player: player)
+                    .ignoresSafeArea()
+            } else {
+                placeholderView
+            }
+        case .vlc:
+#if canImport(VLCKit)
+            if let vlcPlayer = playerVM.vlcMediaPlayer {
+                VLCKitPlayerView(mediaPlayer: vlcPlayer)
+                    .ignoresSafeArea()
+            } else {
+                placeholderView
+            }
+#else
+            Text("VLCKit runtime not available.")
+                .foregroundColor(.gray)
+#endif
+        case .idle:
+            placeholderView
+        }
+    }
+    
+    private var placeholderView: some View {
+        Text("Drop videos here or click + to add")
+            .foregroundColor(.gray)
     }
 }
 

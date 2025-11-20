@@ -15,6 +15,10 @@ class PlaylistViewModel: ObservableObject {
     
     func addFiles(at urls: [URL]) {
         for url in urls {
+            guard VideoFormatSupport.isRecognizedVideo(url: url) else {
+                print("Skipped unsupported file: \(url.lastPathComponent)")
+                continue
+            }
             // Security scope is handled by the player when loading, 
             // but we need to ensure we have access to read the file to add it?
             // Actually, for a playlist, we might just store the URL. 
