@@ -21,6 +21,7 @@ struct ContentView: View {
                     }
                 }
             }
+            .environment(\.layoutDirection, .leftToRight)
         } detail: {
             ZStack {
                 Color.black.ignoresSafeArea()
@@ -35,7 +36,9 @@ struct ContentView: View {
                 
                 PlayerControlsView(playerVM: playerVM)
             }
+            .environment(\.layoutDirection, .leftToRight)
         }
+        .environment(\.layoutDirection, .rightToLeft)
         .onChange(of: playlistVM.currentSelection) { _, newSelection in
             if let id = newSelection, let item = playlistVM.item(for: id) {
                 playerVM.loadVideo(from: item.url)
