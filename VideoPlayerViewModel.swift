@@ -250,7 +250,8 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         player?.volume = volume
 #if canImport(VLCKit)
         if let vlc = vlcMediaPlayer {
-            let scaled = Int32((max(0, min(1, volume))) * 200)
+            let clamped = max(0, min(1, volume))
+            let scaled = Int32(round(clamped * 100))
             vlc.audio?.volume = scaled
         }
 #endif
