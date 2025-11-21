@@ -55,8 +55,8 @@ struct PlayerControlsView: View {
                                     lastHoverDate = Date()
                                 }
                             })
-                            .tint(.white)
-                            .accentColor(.white)
+                            .tint(Color(red: 1.0, green: 0.576, blue: 0.0))
+                            .accentColor(Color(red: 1.0, green: 0.576, blue: 0.0))
                             
                             Text(playerVM.durationString)
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -87,6 +87,7 @@ struct PlayerControlsView: View {
                                 Button(action: { playerVM.togglePlayPause() }) {
                                     Image(systemName: playerVM.isPaused ? "play.fill" : "pause.fill")
                                         .font(.system(size: 32))
+                                        .frame(width: 44, height: 44)
                                         .foregroundColor(.white)
                                         .contentShape(Rectangle())
                                 }
@@ -127,7 +128,8 @@ struct PlayerControlsView: View {
                                         }
                                     })
                                     .frame(width: 80)
-                                    .accentColor(.white)
+                                    .tint(Color(red: 1.0, green: 0.576, blue: 0.0))
+                                    .accentColor(Color(red: 1.0, green: 0.576, blue: 0.0))
                                 }
                                 
                                 Spacer()
@@ -146,10 +148,13 @@ struct PlayerControlsView: View {
                     .padding(.horizontal, 24)
                     .padding(.vertical, 16)
                     .frame(width: panelWidth)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(20)
-                    .padding(.bottom, 40)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24)
+                            .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                    )
                     .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+                    .padding(.bottom, 40)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     // Prevent clicks on the panel from toggling play/pause on the background
                     .onTapGesture { }

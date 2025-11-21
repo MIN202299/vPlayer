@@ -28,7 +28,6 @@ struct SidebarView: View {
                 .help("Clear Playlist")
             }
             .padding()
-            .background(.ultraThinMaterial)
             
             Divider()
             
@@ -40,7 +39,18 @@ struct SidebarView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
         }
-        .background(.ultraThinMaterial) // Sidebar background
+        .background(
+            ZStack {
+                Color.black.opacity(0.2)
+                Rectangle().fill(.ultraThinMaterial)
+            }
+        )
+        .overlay(
+            Rectangle()
+                .frame(width: 1)
+                .foregroundColor(Color.white.opacity(0.15)),
+            alignment: .leading
+        )
         .frame(width: 250)
         .frame(maxHeight: .infinity)
     }
