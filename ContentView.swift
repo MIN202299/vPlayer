@@ -1,12 +1,14 @@
 import SwiftUI
 import AVKit
 import UniformTypeIdentifiers
+import AppKit
 
 struct ContentView: View {
     @StateObject private var playlistVM = PlaylistViewModel()
     @StateObject private var playerVM = VideoPlayerViewModel()
     @State private var isImporterPresented = false
     @State private var showSidebar = false
+    @State private var keyboardMonitor: Any?
     
     var body: some View {
         ZStack(alignment: .trailing) { // Align content to trailing for sidebar
@@ -75,6 +77,12 @@ struct ContentView: View {
             }
             return true
         }
+        .onAppear {
+            registerKeyboardShortcuts()
+        }
+        .onDisappear {
+            removeKeyboardShortcuts()
+        }
     }
     
     @ViewBuilder
@@ -108,6 +116,50 @@ struct ContentView: View {
         Text("Drop videos here or click + to add")
             .foregroundColor(.gray)
     }
+
+    /// Registers a local keyDown monitor to translate key presses into playback actions.
+    private func registerKeyboardShortcuts() {
+        guard keyboardMonitor == nil else { return }
+        keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handleKeyDown(event)
+        }
+    }
+
+    /// Handles the incoming key event and maps supported keys to player actions.
+    private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let disallowedModifiers: NSEvent.ModifierFlags = [.command, .option, .control]
+        if modifiers.intersection(disallowedModifiers).isEmpty == false {
+            return event
+        }
+        
+        switch event.keyCode {
+        case KeyboardKeyCode.space:
+            playerVM.togglePlayPause()
+            return nil
+        case KeyboardKeyCode.leftArrow:
+            playerVM.seek(by: -10)
+            return nil
+        case KeyboardKeyCode.rightArrow:
+            playerVM.seek(by: 10)
+            return nil
+        default:
+            return event
+        }
+    }
+
+    /// Removes the previously registered keyboard monitor to avoid leaks.
+    private func removeKeyboardShortcuts() {
+        guard let monitor = keyboardMonitor else { return }
+        NSEvent.removeMonitor(monitor)
+        keyboardMonitor = nil
+    }
+}
+
+private enum KeyboardKeyCode {
+    static let space: UInt16 = 49
+    static let leftArrow: UInt16 = 123
+    static let rightArrow: UInt16 = 124
 }
 
 extension Array where Element == NSItemProvider {
