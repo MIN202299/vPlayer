@@ -22,6 +22,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     @Published var timeString: String = "00:00"
     @Published var duration: Double = 0.0
     @Published var durationString: String = "00:00"
+    @Published var completionCountdown: Int?
     @Published var volume: Float = 1.0 {
         didSet {
             applyVolume()
@@ -35,10 +36,13 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     private var timeObserver: Any?
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var playerFailedObserver: NSObjectProtocol?
+    private var playerDidPlayToEndObserver: NSObjectProtocol?
     private var seekRequestCancellable: AnyCancellable?
     private var triedVLCKit = false
     private var pendingResumeTime: Double?
     private var lastPersistedPlaybackTime: Double = 0
+    private var completionTimer: Timer?
+    private var shouldRestartFromBeginning = false
     
     override init() {
         super.init()
@@ -75,6 +79,12 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     }
     
     func togglePlayPause() {
+        cancelCompletionCountdown()
+        if shouldRestartFromBeginning {
+            restartCurrentVideoFromBeginning()
+            return
+        }
+        
         switch activeBackend {
         case .avFoundation:
             guard let player = player else { return }
@@ -208,6 +218,14 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
             self?.handleAVFailure(error: error)
         }
+        
+        playerDidPlayToEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handlePlaybackCompletion()
+        }
     }
     
     private func handleAVFailure(error: Error?) {
@@ -224,6 +242,8 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         timeString = formatTime(seconds: 0)
         progress = 0
         pendingResumeTime = nil
+        shouldRestartFromBeginning = false
+        completionCountdown = nil
     }
     
     private func applyVolume() {
@@ -247,6 +267,10 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             NotificationCenter.default.removeObserver(failedObserver)
             playerFailedObserver = nil
         }
+        if let endObserver = playerDidPlayToEndObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            playerDidPlayToEndObserver = nil
+        }
     }
     
     private func cleanUp() {
@@ -263,6 +287,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             url.stopAccessingSecurityScopedResource()
             currentUrl = nil
         }
+        cancelCompletionCountdown()
         activeBackend = .idle
         resetTracking()
     }
@@ -332,6 +357,8 @@ extension VideoPlayerViewModel: VLCMediaPlayerDelegate {
         case .playing:
             isPaused = false
             applyPendingResumeForVLCKit()
+        case .ended:
+            handlePlaybackCompletion()
         default:
             break
         }
@@ -349,12 +376,92 @@ private extension VLCTime {
 }
 #endif
 
-private extension VideoPlayerViewModel {
+extension VideoPlayerViewModel {
     func persistPlaybackTimeIfNeeded(_ time: Double) {
         guard let url = currentUrl else { return }
         guard abs(time - lastPersistedPlaybackTime) >= 1 else { return }
         lastPersistedPlaybackTime = time
         historyStore.updatePlaybackPosition(url: url, time: time)
+    }
+    
+    /// Responds to backend completion events and starts the replay countdown.
+    private func handlePlaybackCompletion() {
+        guard currentUrl != nil else { return }
+        shouldRestartFromBeginning = true
+        isPaused = true
+        progress = 1
+        timeString = durationString
+        startCompletionCountdown()
+    }
+    
+    /// Starts the countdown timer that informs the user before replaying the video.
+    private func startCompletionCountdown() {
+        cancelCompletionCountdown()
+        completionCountdown = 3
+        
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            
+            guard let remaining = self.completionCountdown else {
+                timer.invalidate()
+                return
+            }
+            
+            if remaining <= 1 {
+                timer.invalidate()
+                self.completionCountdown = nil
+                self.restartCurrentVideoFromBeginning()
+            } else {
+                self.completionCountdown = remaining - 1
+            }
+        }
+        
+        completionTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    
+    /// Stops the countdown timer and hides the countdown overlay.
+    func cancelCompletionCountdown() {
+        completionTimer?.invalidate()
+        completionTimer = nil
+        completionCountdown = nil
+    }
+    
+    /// Seeks to the start of the current media and resumes playback.
+    func restartCurrentVideoFromBeginning() {
+        guard let url = currentUrl else { return }
+        shouldRestartFromBeginning = false
+        completionCountdown = nil
+        lastPersistedPlaybackTime = 0
+        historyStore.updatePlaybackPosition(url: url, time: 0)
+        
+        switch activeBackend {
+        case .avFoundation:
+            guard let player = player else { return }
+            player.seek(to: .zero) { [weak self] _ in
+                guard let self else { return }
+                player.play()
+                self.progress = 0
+                self.timeString = self.formatTime(seconds: 0)
+                self.isPaused = false
+            }
+        case .vlc:
+#if canImport(VLCKit)
+            guard let vlc = vlcMediaPlayer else { return }
+            vlc.time = VLCTime.fromSeconds(0)
+            vlc.play()
+            progress = 0
+            timeString = formatTime(seconds: 0)
+            isPaused = false
+#else
+            break
+#endif
+        case .idle:
+            break
+        }
     }
     
     func applyPendingResumeForAVPlayer() {

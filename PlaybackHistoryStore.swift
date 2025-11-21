@@ -10,9 +10,10 @@ struct PlaybackHistorySnapshot: Codable {
     var entries: [PlaylistHistoryEntry]
     var lastPlayedPath: String?
     var lastPlaybackSeconds: Double?
+    var playbackOffsets: [String: Double] = [:]
     
     static var empty: PlaybackHistorySnapshot {
-        PlaybackHistorySnapshot(entries: [], lastPlayedPath: nil, lastPlaybackSeconds: nil)
+        PlaybackHistorySnapshot(entries: [], lastPlayedPath: nil, lastPlaybackSeconds: nil, playbackOffsets: [:])
     }
 }
 
@@ -54,15 +55,21 @@ final class PlaybackHistoryStore {
     func updatePlaybackPosition(url: URL, time: Double) {
         queue.async { [weak self] in
             guard let self else { return }
-            self.snapshot.lastPlayedPath = url.standardizedFileURL.path
+            let path = url.standardizedFileURL.path
+            self.snapshot.lastPlayedPath = path
             self.snapshot.lastPlaybackSeconds = time
+            self.snapshot.playbackOffsets[path] = time
             self.persistSnapshot()
         }
     }
     
     func resumeTimeIfAvailable(for url: URL) -> Double? {
         queue.sync {
-            guard snapshot.lastPlayedPath == url.standardizedFileURL.path else { return nil }
+            let path = url.standardizedFileURL.path
+            if let storedTime = snapshot.playbackOffsets[path] {
+                return storedTime
+            }
+            guard snapshot.lastPlayedPath == path else { return nil }
             return snapshot.lastPlaybackSeconds
         }
     }

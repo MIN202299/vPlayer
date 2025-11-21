@@ -22,6 +22,18 @@ struct ContentView: View {
                         showSidebar.toggle()
                     }
                 })
+                
+                if let countdown = playerVM.completionCountdown {
+                    ReplayOverlayView(
+                        countdown: countdown,
+                        onReplay: {
+                            playerVM.restartCurrentVideoFromBeginning()
+                        },
+                        onCancel: {
+                            playerVM.cancelCompletionCountdown()
+                        }
+                    )
+                }
             }
             .frame(minWidth: 650, minHeight: 400) // Minimum window size larger than control panel
             
