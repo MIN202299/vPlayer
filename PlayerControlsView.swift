@@ -5,6 +5,7 @@ struct PlayerControlsView: View {
     @ObservedObject var playerVM: VideoPlayerViewModel
     @ObservedObject var playlistVM: PlaylistViewModel
     var onToggleSidebar: () -> Void
+    var onTogglePlayPause: () -> Void
     
     @State private var showControls = false
     @State private var lastHoverDate = Date()
@@ -34,7 +35,7 @@ struct PlayerControlsView: View {
                     }
                 }
                 .onTapGesture {
-                    playerVM.togglePlayPause()
+                    onTogglePlayPause()
                 }
             
             VStack {
@@ -84,7 +85,7 @@ struct PlayerControlsView: View {
                                 }
                                 .buttonStyle(.plain)
                                 
-                                Button(action: { playerVM.togglePlayPause() }) {
+                                Button(action: { onTogglePlayPause() }) {
                                     Image(systemName: playerVM.isPaused ? "play.fill" : "pause.fill")
                                         .font(.system(size: 32))
                                         .frame(width: 44, height: 44)
@@ -148,10 +149,28 @@ struct PlayerControlsView: View {
                     .padding(.horizontal, 24)
                     .padding(.vertical, 16)
                     .frame(width: panelWidth)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
+                    .background(
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 24)
+                                .fill(.ultraThinMaterial.opacity(0.7))
+                            RoundedRectangle(cornerRadius: 24)
+                                .fill(Color.white.opacity(0.05))
+                        }
+                    )
                     .overlay(
                         RoundedRectangle(cornerRadius: 24)
-                            .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                            .strokeBorder(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color.white.opacity(0.5),
+                                        Color.white.opacity(0.2),
+                                        Color.white.opacity(0.05)
+                                    ]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1
+                            )
                     )
                     .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
                     .padding(.bottom, 40)

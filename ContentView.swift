@@ -19,11 +19,18 @@ struct ContentView: View {
                 playerSurface()
                 
                 // Floating Controls
-                PlayerControlsView(playerVM: playerVM, playlistVM: playlistVM, onToggleSidebar: {
+                PlayerControlsView(
+                    playerVM: playerVM,
+                    playlistVM: playlistVM,
+                    onToggleSidebar: {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                         showSidebar.toggle()
                     }
-                })
+                },
+                    onTogglePlayPause: {
+                        handlePlayPauseRequest()
+                    }
+                )
                 
                 if let countdown = playerVM.completionCountdown {
                     ReplayOverlayView(
@@ -48,6 +55,10 @@ struct ContentView: View {
                         withAnimation {
                             showSidebar = false
                         }
+                    },
+                    onClearPlaylist: {
+                        playlistVM.clearPlaylist()
+                        playerVM.stopPlayback()
                     }
                 )
                 .transition(.move(edge: .trailing))
@@ -135,7 +146,7 @@ struct ContentView: View {
         
         switch event.keyCode {
         case KeyboardKeyCode.space:
-            playerVM.togglePlayPause()
+            handlePlayPauseRequest()
             return nil
         case KeyboardKeyCode.leftArrow:
             playerVM.seek(by: -10)
@@ -148,6 +159,34 @@ struct ContentView: View {
         }
     }
 
+    /// Responds to play or pause requests, ensuring a video is ready or prompting file import.
+    private func handlePlayPauseRequest() {
+        if playerVM.activeBackend == .idle {
+            if loadSelectedVideoIfAvailable() {
+                return
+            }
+            if let firstItem = playlistVM.items.first {
+                playlistVM.currentSelection = firstItem.id
+                return
+            }
+            isImporterPresented = true
+            return
+        }
+        playerVM.togglePlayPause()
+    }
+    
+    /// Loads the currently selected playlist item when available.
+    private func loadSelectedVideoIfAvailable() -> Bool {
+        guard
+            let selection = playlistVM.currentSelection,
+            let item = playlistVM.item(for: selection)
+        else {
+            return false
+        }
+        playerVM.loadVideo(from: item.url)
+        return true
+    }
+    
     /// Removes the previously registered keyboard monitor to avoid leaks.
     private func removeKeyboardShortcuts() {
         guard let monitor = keyboardMonitor else { return }

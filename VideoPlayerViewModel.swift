@@ -17,13 +17,13 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     @Published var vlcMediaPlayer: VLCMediaPlayer?
 #endif
     @Published var activeBackend: PlaybackBackendType = .idle
-    @Published var isPaused: Bool = false
+    @Published var isPaused: Bool = true
     @Published var progress: Double = 0.0
     @Published var timeString: String = "00:00"
     @Published var duration: Double = 0.0
     @Published var durationString: String = "00:00"
     @Published var completionCountdown: Int?
-    @Published var volume: Float = 1.0 {
+    @Published var volume: Float = 0.5 {
         didSet {
             applyVolume()
         }
@@ -109,6 +109,11 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         case .idle:
             break
         }
+    }
+    
+    /// Stops any current playback session and resets the player state.
+    func stopPlayback() {
+        cleanUp()
     }
     
     func seek(by seconds: Double) {
@@ -290,6 +295,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         }
         cancelCompletionCountdown()
         activeBackend = .idle
+        isPaused = true
         resetTracking()
     }
     

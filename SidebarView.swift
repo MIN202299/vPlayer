@@ -4,6 +4,7 @@ struct SidebarView: View {
     @ObservedObject var playlistVM: PlaylistViewModel
     @Binding var isImporterPresented: Bool
     var onClose: () -> Void
+    var onClearPlaylist: () -> Void
     
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +20,7 @@ struct SidebarView: View {
                 
                 Spacer()
                 
-                Button(action: { playlistVM.clearPlaylist() }) {
+                Button(action: { onClearPlaylist() }) {
                     Image(systemName: "trash")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(.primary)
@@ -29,7 +30,9 @@ struct SidebarView: View {
             }
             .padding()
             
-            Divider()
+            Rectangle()
+                .fill(Color.white.opacity(0.1))
+                .frame(height: 1)
             
             // List
             List(playlistVM.items, selection: $playlistVM.currentSelection) { item in
@@ -41,17 +44,27 @@ struct SidebarView: View {
         }
         .background(
             ZStack {
-                Color.black.opacity(0.2)
-                Rectangle().fill(.ultraThinMaterial)
+                Rectangle().fill(.ultraThinMaterial.opacity(0.7))
+                Rectangle().fill(Color.white.opacity(0.02))
             }
         )
         .overlay(
             Rectangle()
-                .frame(width: 1)
-                .foregroundColor(Color.white.opacity(0.15)),
+                .fill(
+                    LinearGradient(
+                        gradient: Gradient(colors: [
+                            Color.white.opacity(0.4),
+                            Color.white.opacity(0.1)
+                        ]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 1),
             alignment: .leading
         )
         .frame(width: 250)
         .frame(maxHeight: .infinity)
+        .ignoresSafeArea()
     }
 }
