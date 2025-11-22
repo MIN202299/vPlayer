@@ -106,26 +106,33 @@ struct ContentView: View {
             } else {
                 placeholderView
             }
-        case .vlc:
-#if canImport(VLCKit)
-            if let vlcPlayer = playerVM.vlcMediaPlayer {
-                VLCKitPlayerView(mediaPlayer: vlcPlayer)
-                    .ignoresSafeArea()
-            } else {
-                placeholderView
-            }
-#else
-            Text("VLCKit runtime not available.")
-                .foregroundColor(.gray)
-#endif
+        case .preparing:
+            statusView(message: playerVM.statusMessage ?? "正在准备播放...")
         case .idle:
             placeholderView
         }
     }
     
     private var placeholderView: some View {
-        Text("Drop videos here or click + to add")
-            .foregroundColor(.gray)
+        VStack(spacing: 12) {
+            if let message = playerVM.statusMessage {
+                Text(message)
+                    .foregroundColor(.gray)
+            } else {
+                Text("Drop videos here or click + to add")
+                    .foregroundColor(.gray)
+            }
+        }
+    }
+    
+    private func statusView(message: String) -> some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(.white)
+            Text(message)
+                .foregroundColor(.white.opacity(0.8))
+        }
     }
 
     /// Registers a local keyDown monitor to translate key presses into playback actions.

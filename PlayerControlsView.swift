@@ -135,14 +135,19 @@ struct PlayerControlsView: View {
                                 
                                 Spacer()
                                 
-                                // Right Side Controls (Playlist)
-                                Button(action: onToggleSidebar) {
-                                    Image(systemName: "sidebar.right")
-                                        .font(.system(size: 20))
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .contentShape(Rectangle())
+                                // Right Side Controls (AirPlay + Playlist)
+                                HStack(spacing: 16) {
+                                    AirPlayRoutePickerView()
+                                        .frame(width: 32, height: 32)
+                                    
+                                    Button(action: onToggleSidebar) {
+                                        Image(systemName: "sidebar.right")
+                                            .font(.system(size: 20))
+                                            .foregroundColor(.white.opacity(0.8))
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
                     }

@@ -1,21 +1,15 @@
 import Foundation
 import AVKit
 import Combine
-#if canImport(VLCKit)
-import VLCKit
-#endif
 
 enum PlaybackBackendType: Equatable {
     case idle
+    case preparing
     case avFoundation
-    case vlc
 }
 
 final class VideoPlayerViewModel: NSObject, ObservableObject {
     @Published var player: AVPlayer?
-#if canImport(VLCKit)
-    @Published var vlcMediaPlayer: VLCMediaPlayer?
-#endif
     @Published var activeBackend: PlaybackBackendType = .idle
     @Published var isPaused: Bool = true
     @Published var progress: Double = 0.0
@@ -28,17 +22,23 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             applyVolume()
         }
     }
+    @Published var statusMessage: String?
     
     var isSeeking = false
     
     private let historyStore = PlaybackHistoryStore.shared
+    private let playbackPlanner = PlaybackPlanner()
+    private let remuxCoordinator = RemuxCoordinator()
     private var currentUrl: URL?
     private var timeObserver: Any?
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var playerFailedObserver: NSObjectProtocol?
     private var playerDidPlayToEndObserver: NSObjectProtocol?
     private var seekRequestCancellable: AnyCancellable?
-    private var triedVLCKit = false
+    private var remuxTask: RemuxCoordinator.Task?
+    private var activeStreamHandle: LocalHTTPStreamHandle?
+    private var currentPlan: PlaybackPlan?
+    private var hasAttemptedRemuxFallback = false
     private var pendingResumeTime: Double?
     private var lastPersistedPlaybackTime: Double = 0
     private var completionTimer: Timer?
@@ -53,6 +53,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         cleanUp()
     }
     
+    /// Loads the provided media URL using the best available plan.
     func loadVideo(from url: URL) {
         cleanUp()
         resetTracking()
@@ -63,19 +64,27 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         }
         
         currentUrl = url
-        triedVLCKit = false
         pendingResumeTime = historyStore.resumeTimeIfAvailable(for: url)
         lastPersistedPlaybackTime = pendingResumeTime ?? 0
+        hasAttemptedRemuxFallback = false
+        statusMessage = nil
         
-#if canImport(VLCKit)
-        if VideoFormatSupport.prefersAVFoundation(for: url) {
-            activateAVFoundation(with: url)
-        } else {
-            activateVLCKitIfAvailable(with: url, reason: "Preferred backend")
+        let plan = playbackPlanner.plan(for: url)
+        currentPlan = plan
+        if plan.requiresRemux {
+            hasAttemptedRemuxFallback = true
         }
-#else
-        activateAVFoundation(with: url)
-#endif
+        
+        switch plan {
+        case .direct(let directURL):
+            activateAVFoundation(with: directURL)
+        case .remux(let request):
+            prepareRemux(for: request)
+        case .needsTranscode:
+            statusMessage = "当前格式暂不支持，FFmpeg+VideoToolbox 转码将于后续版本加入。"
+            activeBackend = .idle
+            // TODO: 引入 FFmpeg + VideoToolbox 转码管线以覆盖剩余格式。
+        }
     }
     
     func togglePlayPause() {
@@ -95,18 +104,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
                 player.play()
                 isPaused = false
             }
-        case .vlc:
-#if canImport(VLCKit)
-            guard let vlc = vlcMediaPlayer else { return }
-            if vlc.isPlaying {
-                vlc.pause()
-                isPaused = true
-            } else {
-                vlc.play()
-                isPaused = false
-            }
-#endif
-        case .idle:
+        case .preparing, .idle:
             break
         }
     }
@@ -128,14 +126,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             newTime = max(0, min(newTime, maxDuration))
             
             player.seek(to: CMTime(seconds: newTime, preferredTimescale: 600))
-        case .vlc:
-#if canImport(VLCKit)
-            guard let vlc = vlcMediaPlayer else { return }
-            let currentSeconds = (vlc.time as VLCTime?)?.seconds ?? 0
-            let newSeconds = max(0, currentSeconds + seconds)
-            vlc.time = VLCTime.fromSeconds(newSeconds)
-#endif
-        case .idle:
+        case .preparing, .idle:
             break
         }
     }
@@ -156,14 +147,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             let targetTime = value * duration
             player.seek(to: CMTime(seconds: targetTime, preferredTimescale: 600))
             timeString = formatTime(seconds: targetTime)
-        case .vlc:
-#if canImport(VLCKit)
-            guard let vlc = vlcMediaPlayer else { return }
-            let targetSeconds = value * duration
-            vlc.time = VLCTime.fromSeconds(targetSeconds)
-            timeString = formatTime(seconds: targetSeconds)
-#endif
-        case .idle:
+        case .preparing, .idle:
             break
         }
     }
@@ -174,16 +158,17 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             player.replaceCurrentItem(with: item)
         } else {
             let player = AVPlayer(playerItem: item)
-            player.allowsExternalPlayback = true
             self.player = player
         }
         
         activeBackend = .avFoundation
         setupPlayerObservers(with: item)
+        AirPlayManager.shared.attach(to: player)
         
         player?.volume = volume
         player?.play()
         isPaused = false
+        statusMessage = nil
     }
     
     private func setupPlayerObservers(with item: AVPlayerItem) {
@@ -234,11 +219,18 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     }
     
     private func handleAVFailure(error: Error?) {
-        guard activeBackend == .avFoundation else { return }
-        if let error = error {
+        guard let url = currentUrl else { return }
+        if let error {
             print("AVPlayer failed: \(error.localizedDescription)")
         }
-        activateVLCKitIfAvailable(reason: "AVFoundation failure")
+        if !hasAttemptedRemuxFallback {
+            hasAttemptedRemuxFallback = true
+            prepareRemux(for: RemuxRequest(sourceURL: url, targetFileType: .mp4))
+            return
+        }
+        statusMessage = error?.localizedDescription ?? "无法播放该视频。"
+        activeBackend = .idle
+        isPaused = true
     }
     
     private func resetTracking() {
@@ -251,15 +243,43 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         completionCountdown = nil
     }
     
+    /// Starts a remux pipeline and swaps in the resulting local HTTP stream.
+    private func prepareRemux(for request: RemuxRequest) {
+        remuxTask?.cancel()
+        statusMessage = "正在准备 AirPlay 兼容格式..."
+        activeBackend = .preparing
+        
+        remuxTask = remuxCoordinator.prepareStream(for: request) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard self.currentUrl == request.sourceURL else {
+                    if case .success(let handle) = result {
+                        handle.cleanup()
+                    }
+                    return
+                }
+                self.remuxTask = nil
+                switch result {
+                case .success(let handle):
+                    self.installStreamHandle(handle)
+                    self.activateAVFoundation(with: handle.url)
+                case .failure(let error):
+                    self.statusMessage = error.localizedDescription
+                    self.activeBackend = .idle
+                    self.isPaused = true
+                }
+            }
+        }
+    }
+    
+    /// Tracks the currently active HTTP stream so it can be torn down when no longer needed.
+    private func installStreamHandle(_ handle: LocalHTTPStreamHandle) {
+        activeStreamHandle?.cleanup()
+        activeStreamHandle = handle
+    }
+    
     private func applyVolume() {
         player?.volume = volume
-#if canImport(VLCKit)
-        if let vlc = vlcMediaPlayer {
-            let clamped = max(0, min(1, volume))
-            let scaled = Int32(round(clamped * 100))
-            vlc.audio?.volume = scaled
-        }
-#endif
     }
     
     private func removeAVPlayerObservers() {
@@ -284,11 +304,10 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
-#if canImport(VLCKit)
-        vlcMediaPlayer?.stop()
-        vlcMediaPlayer?.delegate = nil
-        vlcMediaPlayer = nil
-#endif
+        remuxTask?.cancel()
+        remuxTask = nil
+        activeStreamHandle?.cleanup()
+        activeStreamHandle = nil
         if let url = currentUrl {
             url.stopAccessingSecurityScopedResource()
             currentUrl = nil
@@ -296,6 +315,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         cancelCompletionCountdown()
         activeBackend = .idle
         isPaused = true
+        statusMessage = nil
         resetTracking()
     }
     
@@ -306,82 +326,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         return String(format: "%02d:%02d", m, s)
     }
     
-#if canImport(VLCKit)
-    private func activateVLCKitIfAvailable(with url: URL? = nil, reason: String) {
-        guard let playbackUrl = url ?? currentUrl else { return }
-        if triedVLCKit {
-            print("VLCKit already attempted. Reason: \(reason)")
-            return
-        }
-        triedVLCKit = true
-        
-        removeAVPlayerObservers()
-        player?.pause()
-        player?.replaceCurrentItem(with: nil)
-        player = nil
-        
-        let mediaPlayer = VLCMediaPlayer()
-        mediaPlayer.delegate = self
-        mediaPlayer.media = VLCMedia(url: playbackUrl)
-        
-        vlcMediaPlayer = mediaPlayer
-        activeBackend = .vlc
-        mediaPlayer.play()
-        applyVolume()
-        isPaused = false
-    }
-#else
-    private func activateVLCKitIfAvailable(with url: URL? = nil, reason: String) {
-        print("VLCKit is not available. Reason: \(reason)")
-    }
-#endif
 }
-
-#if canImport(VLCKit)
-extension VideoPlayerViewModel: VLCMediaPlayerDelegate {
-    func mediaPlayerTimeChanged(_ aNotification: Notification) {
-        guard activeBackend == .vlc, let vlc = vlcMediaPlayer, !isSeeking else { return }
-        let currentSeconds = (vlc.time as VLCTime?)?.seconds ?? 0
-        timeString = formatTime(seconds: currentSeconds)
-        
-        let mediaDuration = vlc.media.flatMap { media -> Double? in
-            let length: VLCTime? = media.length
-            return length?.seconds
-        } ?? 0
-        if mediaDuration > 0 {
-            duration = mediaDuration
-            durationString = formatTime(seconds: mediaDuration)
-            progress = currentSeconds / mediaDuration
-            persistPlaybackTimeIfNeeded(currentSeconds)
-        }
-    }
-    
-    func mediaPlayerStateChanged(_ aNotification: Notification) {
-        guard activeBackend == .vlc, let vlc = vlcMediaPlayer else { return }
-        switch vlc.state {
-        case .paused, .stopped:
-            isPaused = true
-        case .playing:
-            isPaused = false
-            applyPendingResumeForVLCKit()
-        case .ended:
-            handlePlaybackCompletion()
-        default:
-            break
-        }
-    }
-}
-
-private extension VLCTime {
-    var seconds: Double {
-        Double(intValue) / 1000.0
-    }
-    
-    static func fromSeconds(_ seconds: Double) -> VLCTime {
-        VLCTime(number: NSNumber(value: seconds * 1000.0))
-    }
-}
-#endif
 
 extension VideoPlayerViewModel {
     func persistPlaybackTimeIfNeeded(_ time: Double) {
@@ -455,18 +400,7 @@ extension VideoPlayerViewModel {
                 self.timeString = self.formatTime(seconds: 0)
                 self.isPaused = false
             }
-        case .vlc:
-#if canImport(VLCKit)
-            guard let vlc = vlcMediaPlayer else { return }
-            vlc.time = VLCTime.fromSeconds(0)
-            vlc.play()
-            progress = 0
-            timeString = formatTime(seconds: 0)
-            isPaused = false
-#else
-            break
-#endif
-        case .idle:
+        case .preparing, .idle:
             break
         }
     }
@@ -476,14 +410,4 @@ extension VideoPlayerViewModel {
         pendingResumeTime = nil
         player.seek(to: CMTime(seconds: pending, preferredTimescale: 600))
     }
-    
-#if canImport(VLCKit)
-    func applyPendingResumeForVLCKit() {
-        guard let pending = pendingResumeTime, let vlc = vlcMediaPlayer else { return }
-        pendingResumeTime = nil
-        vlc.time = VLCTime.fromSeconds(pending)
-    }
-#else
-    func applyPendingResumeForVLCKit() {}
-#endif
 }
