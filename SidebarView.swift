@@ -38,6 +38,11 @@ struct SidebarView: View {
             List(playlistVM.items, selection: $playlistVM.currentSelection) { item in
                 Text(item.title)
                     .tag(item.id)
+                    .listRowBackground(
+                        playlistVM.currentSelection == item.id ?
+                        Color(red: 1.0, green: 0.576, blue: 0.0) :
+                        nil
+                    )
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -66,5 +71,6 @@ struct SidebarView: View {
         .frame(width: 250)
         .frame(maxHeight: .infinity)
         .ignoresSafeArea()
+        .environment(\.colorScheme, .dark)
     }
 }
