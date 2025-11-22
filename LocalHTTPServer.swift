@@ -19,7 +19,11 @@ final class LocalHTTPServer {
     }
     
     private struct Session {
-        let fileURL: URL
+        enum Kind {
+            case file(url: URL)
+            case hls(directory: URL, playlist: String)
+        }
+        let kind: Kind
     }
     
     private let queue = DispatchQueue(label: "io.vplayer.httpserver")
@@ -34,7 +38,7 @@ final class LocalHTTPServer {
         try queue.sync {
             try startIfNeededLocked()
             let sessionId = UUID().uuidString
-            sessions[sessionId] = Session(fileURL: fileURL)
+            sessions[sessionId] = Session(kind: .file(url: fileURL))
             guard let port else {
                 throw LocalHTTPServerError.portUnavailable
             }
@@ -45,7 +49,32 @@ final class LocalHTTPServer {
                 cleanup: { [weak self] in
                     self?.queue.async {
                         self?.sessions.removeValue(forKey: sessionId)
-                        try? FileManager.default.removeItem(at: fileURL)
+                    }
+                }
+            )
+        }
+    }
+    
+    /// Registers an HLS directory (playlist + segments) and returns the playlist URL.
+    func registerHLSDirectory(at directory: URL, playlistFilename: String) throws -> LocalHTTPStreamHandle {
+        try queue.sync {
+            try startIfNeededLocked()
+            let sessionId = UUID().uuidString
+            let playlistURL = directory.appendingPathComponent(playlistFilename)
+            guard FileManager.default.fileExists(atPath: playlistURL.path) else {
+                throw LocalHTTPServerError.invalidRequest
+            }
+            sessions[sessionId] = Session(kind: .hls(directory: directory, playlist: playlistFilename))
+            guard let port else {
+                throw LocalHTTPServerError.portUnavailable
+            }
+            let streamURL = URL(string: "http://127.0.0.1:\(port)/hls/\(sessionId)/\(playlistFilename)")!
+            return LocalHTTPStreamHandle(
+                id: sessionId,
+                url: streamURL,
+                cleanup: { [weak self] in
+                    self?.queue.async {
+                        self?.sessions.removeValue(forKey: sessionId)
                     }
                 }
             )
@@ -67,7 +96,7 @@ final class LocalHTTPServer {
             }
             listener.start(queue: queue)
             self.listener = listener
-            self.port = listener.port?.rawValue ?? 39453
+            self.port = 39453
         } catch {
             throw LocalHTTPServerError.listenerFailed
         }
@@ -134,25 +163,40 @@ final class LocalHTTPServer {
         }
         
         let headers = parseHeaders(from: request)
-        let segments = decodedPath.split(separator: "/")
-        guard segments.count == 3, segments[1] == "stream" else {
+        let segments = decodedPath.split(separator: "/").map(String.init)
+        guard segments.count >= 2 else {
             send(status: 404, body: "Not Found", connection: connection)
             return
         }
         
-        let sessionId = String(segments[2])
+        let route = segments[0]
+        let sessionId = segments[1]
+        
         guard let session = sessions[sessionId] else {
             send(status: 404, body: "Not Found", connection: connection)
             return
         }
         
-        serve(session: session, headers: headers, connection: connection)
+        switch (route, session.kind) {
+        case ("stream", .file(let url)):
+            guard segments.count == 2 else {
+                send(status: 404, body: "Not Found", connection: connection)
+                return
+            }
+            serveFile(url: url, headers: headers, connection: connection)
+        case ("hls", .hls(let directory, let playlist)):
+            let relativeComponents = segments.dropFirst(2)
+            let relativePath = relativeComponents.isEmpty ? playlist : relativeComponents.joined(separator: "/")
+            serveHLS(directory: directory, relativePath: relativePath, connection: connection)
+        default:
+            send(status: 404, body: "Not Found", connection: connection)
+        }
     }
     
     /// Responds with the requested file, honoring HTTP range headers for seeking.
-    private func serve(session: Session, headers: [String: String], connection: NWConnection) {
+    private func serveFile(url fileURL: URL, headers: [String: String], connection: NWConnection) {
         do {
-            let attrs = try FileManager.default.attributesOfItem(atPath: session.fileURL.path)
+            let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
             let totalBytes = (attrs[.size] as? NSNumber)?.int64Value ?? 0
             guard totalBytes > 0 else {
                 send(status: 410, body: "Gone", connection: connection)
@@ -173,7 +217,7 @@ final class LocalHTTPServer {
                 range: range
             )
             
-            let handle = try FileHandle(forReadingFrom: session.fileURL)
+            let handle = try FileHandle(forReadingFrom: fileURL)
             try handle.seek(toOffset: UInt64(range.lowerBound))
             
             connection.send(
@@ -236,6 +280,32 @@ final class LocalHTTPServer {
                 )
             }
         )
+    }
+    
+    private func serveHLS(directory: URL, relativePath: String, connection: NWConnection) {
+        guard let fileURL = resolve(relativePath: relativePath, in: directory) else {
+            send(status: 404, body: "Not Found", connection: connection)
+            return
+        }
+        
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            send(status: 404, body: "Not Found", connection: connection)
+            return
+        }
+        
+        do {
+            let data = try Data(contentsOf: fileURL)
+            var response = "HTTP/1.1 200 OK\r\n"
+            response += "Content-Length: \(data.count)\r\n"
+            response += "Content-Type: \(contentType(for: fileURL))\r\n"
+            response += "Connection: close\r\n"
+            response += "\r\n"
+            connection.send(content: Data(response.utf8) + data, completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+        } catch {
+            send(status: 500, body: "Server Error", connection: connection)
+        }
     }
     
     /// Sends a plain-text HTTP error response.
@@ -337,6 +407,29 @@ final class LocalHTTPServer {
         case 416: return "Requested Range Not Satisfiable"
         case 500: return "Internal Server Error"
         default: return "HTTP"
+        }
+    }
+    private func resolve(relativePath: String, in directory: URL) -> URL? {
+        let sanitized = relativePath.replacingOccurrences(of: "..", with: "")
+        let target = directory.appendingPathComponent(sanitized).standardizedFileURL
+        let base = directory.standardizedFileURL.path
+        if target.path.hasPrefix(base) {
+            return target
+        }
+        return nil
+    }
+    
+    private func contentType(for url: URL) -> String {
+        let ext = url.pathExtension.lowercased()
+        switch ext {
+        case "m3u8":
+            return "application/vnd.apple.mpegurl"
+        case "ts":
+            return "video/mp2t"
+        case "mp4", "m4s":
+            return "video/mp4"
+        default:
+            return "application/octet-stream"
         }
     }
 }

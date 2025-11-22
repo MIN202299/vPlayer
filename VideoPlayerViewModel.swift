@@ -28,17 +28,18 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     
     private let historyStore = PlaybackHistoryStore.shared
     private let playbackPlanner = PlaybackPlanner()
-    private let remuxCoordinator = RemuxCoordinator()
+    private let processingCoordinator = ProcessingCoordinator()
     private var currentUrl: URL?
     private var timeObserver: Any?
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var playerFailedObserver: NSObjectProtocol?
     private var playerDidPlayToEndObserver: NSObjectProtocol?
     private var seekRequestCancellable: AnyCancellable?
-    private var remuxTask: RemuxCoordinator.Task?
+    private var processingTask: ProcessingTask?
     private var activeStreamHandle: LocalHTTPStreamHandle?
+    private var activeArtifactCleanup: (() -> Void)?
     private var currentPlan: PlaybackPlan?
-    private var hasAttemptedRemuxFallback = false
+    private var hasAttemptedProcessingFallback = false
     private var pendingResumeTime: Double?
     private var lastPersistedPlaybackTime: Double = 0
     private var completionTimer: Timer?
@@ -66,24 +67,22 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         currentUrl = url
         pendingResumeTime = historyStore.resumeTimeIfAvailable(for: url)
         lastPersistedPlaybackTime = pendingResumeTime ?? 0
-        hasAttemptedRemuxFallback = false
+        hasAttemptedProcessingFallback = false
         statusMessage = nil
         
         let plan = playbackPlanner.plan(for: url)
+        execute(plan: plan)
+    }
+    
+    private func execute(plan: PlaybackPlan) {
         currentPlan = plan
-        if plan.requiresRemux {
-            hasAttemptedRemuxFallback = true
-        }
-        
         switch plan {
         case .direct(let directURL):
             activateAVFoundation(with: directURL)
         case .remux(let request):
             prepareRemux(for: request)
-        case .needsTranscode:
-            statusMessage = "当前格式暂不支持，FFmpeg+VideoToolbox 转码将于后续版本加入。"
-            activeBackend = .idle
-            // TODO: 引入 FFmpeg + VideoToolbox 转码管线以覆盖剩余格式。
+        case .transcode(let request):
+            prepareTranscode(for: request)
         }
     }
     
@@ -223,14 +222,17 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         if let error {
             print("AVPlayer failed: \(error.localizedDescription)")
         }
-        if !hasAttemptedRemuxFallback {
-            hasAttemptedRemuxFallback = true
-            prepareRemux(for: RemuxRequest(sourceURL: url, targetFileType: .mp4))
+        
+        if hasAttemptedProcessingFallback {
+            statusMessage = error?.localizedDescription ?? "无法播放该视频。"
+            activeBackend = .idle
+            isPaused = true
             return
         }
-        statusMessage = error?.localizedDescription ?? "无法播放该视频。"
-        activeBackend = .idle
-        isPaused = true
+        
+        hasAttemptedProcessingFallback = true
+        let fallbackPlan = playbackPlanner.forcedTranscodePlan(for: url)
+        execute(plan: fallbackPlan)
     }
     
     private func resetTracking() {
@@ -245,24 +247,54 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     
     /// Starts a remux pipeline and swaps in the resulting local HTTP stream.
     private func prepareRemux(for request: RemuxRequest) {
-        remuxTask?.cancel()
-        statusMessage = "正在准备 AirPlay 兼容格式..."
+        startProcessing(
+            for: request.sourceURL,
+            status: "正在重封装以适配 AirPlay...",
+            launcher: { completion in
+                self.processingCoordinator.prepareStream(for: request, completion: completion)
+            }
+        )
+    }
+    
+    private func prepareTranscode(for request: TranscodeRequest) {
+        startProcessing(
+            for: request.sourceURL,
+            status: "正在转码以适配 AirPlay...",
+            launcher: { completion in
+                self.processingCoordinator.prepareStream(for: request, completion: completion)
+            }
+        )
+    }
+    
+    private func startProcessing(
+        for sourceURL: URL,
+        status message: String,
+        launcher: (@escaping (Result<ProcessingArtifact, Error>) -> Void) -> ProcessingTask
+    ) {
+        processingTask?.cancel()
+        statusMessage = message
         activeBackend = .preparing
-        
-        remuxTask = remuxCoordinator.prepareStream(for: request) { [weak self] result in
+        processingTask = launcher { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
-                guard self.currentUrl == request.sourceURL else {
-                    if case .success(let handle) = result {
-                        handle.cleanup()
+                guard self.currentUrl == sourceURL else {
+                    if case .success(let artifact) = result {
+                        artifact.cleanup()
                     }
                     return
                 }
-                self.remuxTask = nil
+                self.processingTask = nil
                 switch result {
-                case .success(let handle):
-                    self.installStreamHandle(handle)
-                    self.activateAVFoundation(with: handle.url)
+                case .success(let artifact):
+                    do {
+                        let handle = try self.registerHTTPHandle(for: artifact)
+                        self.installStreamHandle(handle, artifactCleanup: artifact.cleanup)
+                    } catch {
+                        artifact.cleanup()
+                        self.statusMessage = error.localizedDescription
+                        self.activeBackend = .idle
+                        self.isPaused = true
+                    }
                 case .failure(let error):
                     self.statusMessage = error.localizedDescription
                     self.activeBackend = .idle
@@ -273,9 +305,21 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     }
     
     /// Tracks the currently active HTTP stream so it can be torn down when no longer needed.
-    private func installStreamHandle(_ handle: LocalHTTPStreamHandle) {
+    private func installStreamHandle(_ handle: LocalHTTPStreamHandle, artifactCleanup: @escaping () -> Void) {
         activeStreamHandle?.cleanup()
+        activeArtifactCleanup?()
         activeStreamHandle = handle
+        activeArtifactCleanup = artifactCleanup
+        activateAVFoundation(with: handle.url)
+    }
+    
+    private func registerHTTPHandle(for artifact: ProcessingArtifact) throws -> LocalHTTPStreamHandle {
+        switch artifact.kind {
+        case .file(let url):
+            return try LocalHTTPServer.shared.registerFile(at: url)
+        case .hls(let directory, let playlist):
+            return try LocalHTTPServer.shared.registerHLSDirectory(at: directory, playlistFilename: playlist)
+        }
     }
     
     private func applyVolume() {
@@ -304,10 +348,12 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
-        remuxTask?.cancel()
-        remuxTask = nil
+        processingTask?.cancel()
+        processingTask = nil
         activeStreamHandle?.cleanup()
         activeStreamHandle = nil
+        activeArtifactCleanup?()
+        activeArtifactCleanup = nil
         if let url = currentUrl {
             url.stopAccessingSecurityScopedResource()
             currentUrl = nil
