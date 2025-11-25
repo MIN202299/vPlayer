@@ -107,7 +107,7 @@ struct ContentView: View {
                 placeholderView
             }
         case .preparing:
-            statusView(message: playerVM.statusMessage ?? "正在准备播放...")
+            statusView(message: playerVM.statusMessage)
         case .idle:
             placeholderView
         }
@@ -125,13 +125,15 @@ struct ContentView: View {
         }
     }
     
-    private func statusView(message: String) -> some View {
+    private func statusView(message: String?) -> some View {
         VStack(spacing: 12) {
             ProgressView()
                 .progressViewStyle(.circular)
                 .tint(.white)
-            Text(message)
-                .foregroundColor(.white.opacity(0.8))
+            if let message, message.isEmpty == false {
+                Text(message)
+                    .foregroundColor(.white.opacity(0.8))
+            }
         }
     }
 

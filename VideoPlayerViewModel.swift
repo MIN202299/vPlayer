@@ -26,7 +26,6 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     
     var isSeeking = false
     
-    private let historyStore = PlaybackHistoryStore.shared
     private let playbackPlanner = PlaybackPlanner()
     private let processingCoordinator = ProcessingCoordinator()
     private var currentUrl: URL?
@@ -40,8 +39,6 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     private var activeArtifactCleanup: (() -> Void)?
     private var currentPlan: PlaybackPlan?
     private var hasAttemptedProcessingFallback = false
-    private var pendingResumeTime: Double?
-    private var lastPersistedPlaybackTime: Double = 0
     private var completionTimer: Timer?
     private var shouldRestartFromBeginning = false
     
@@ -65,8 +62,6 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         }
         
         currentUrl = url
-        pendingResumeTime = historyStore.resumeTimeIfAvailable(for: url)
-        lastPersistedPlaybackTime = pendingResumeTime ?? 0
         hasAttemptedProcessingFallback = false
         statusMessage = nil
         
@@ -184,7 +179,6 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             self.durationString = self.formatTime(seconds: duration)
             self.progress = time.seconds / duration
             self.timeString = self.formatTime(seconds: time.seconds)
-            self.persistPlaybackTimeIfNeeded(time.seconds)
         }
         
         playerItemStatusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
@@ -192,8 +186,6 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
             switch item.status {
             case .failed:
                 self.handleAVFailure(error: item.error)
-            case .readyToPlay:
-                self.applyPendingResumeForAVPlayer()
             default:
                 break
             }
@@ -240,7 +232,6 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
         durationString = formatTime(seconds: 0)
         timeString = formatTime(seconds: 0)
         progress = 0
-        pendingResumeTime = nil
         shouldRestartFromBeginning = false
         completionCountdown = nil
     }
@@ -249,7 +240,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     private func prepareRemux(for request: RemuxRequest) {
         startProcessing(
             for: request.sourceURL,
-            status: "正在重封装以适配 AirPlay...",
+            status: nil,
             launcher: { completion in
                 self.processingCoordinator.prepareStream(for: request, completion: completion)
             }
@@ -268,7 +259,7 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
     
     private func startProcessing(
         for sourceURL: URL,
-        status message: String,
+        status message: String?,
         launcher: (@escaping (Result<ProcessingArtifact, Error>) -> Void) -> ProcessingTask
     ) {
         processingTask?.cancel()
@@ -375,13 +366,6 @@ final class VideoPlayerViewModel: NSObject, ObservableObject {
 }
 
 extension VideoPlayerViewModel {
-    func persistPlaybackTimeIfNeeded(_ time: Double) {
-        guard let url = currentUrl else { return }
-        guard abs(time - lastPersistedPlaybackTime) >= 1 else { return }
-        lastPersistedPlaybackTime = time
-        historyStore.updatePlaybackPosition(url: url, time: time)
-    }
-    
     /// Responds to backend completion events and starts the replay countdown.
     private func handlePlaybackCompletion() {
         guard currentUrl != nil else { return }
@@ -430,11 +414,9 @@ extension VideoPlayerViewModel {
     
     /// Seeks to the start of the current media and resumes playback.
     func restartCurrentVideoFromBeginning() {
-        guard let url = currentUrl else { return }
+        guard currentUrl != nil else { return }
         shouldRestartFromBeginning = false
         completionCountdown = nil
-        lastPersistedPlaybackTime = 0
-        historyStore.updatePlaybackPosition(url: url, time: 0)
         
         switch activeBackend {
         case .avFoundation:
@@ -451,9 +433,4 @@ extension VideoPlayerViewModel {
         }
     }
     
-    func applyPendingResumeForAVPlayer() {
-        guard let pending = pendingResumeTime, let player = player else { return }
-        pendingResumeTime = nil
-        player.seek(to: CMTime(seconds: pending, preferredTimescale: 600))
-    }
 }
